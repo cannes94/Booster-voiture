@@ -1,7 +1,8 @@
-package com.example.test
+package com.cannes94.boostervoiture
 
 import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
+import android.util.Log
 /**
  * Moteur de boost global (session audio 0) pour usage perso voiture.
  * Total affiché 100..150% : 100 = gain 0mB, 150 = +1000mB (~+10dB).
@@ -14,6 +15,9 @@ class BoostEngine {
         const val MIN_TOTAL = 100
         const val MAX_TOTAL = 150
         const val MAX_GAIN_MB = 1000
+        /** 1% de boost = 20 mB de gain (100..150% => 0..1000 mB). */
+        const val MB_PER_PERCENT = 20
+        private const val TAG = "BoostEngine"
     }
 
     private var loudness: LoudnessEnhancer? = null
@@ -41,15 +45,18 @@ class BoostEngine {
             eq = try {
                 Equalizer(0, 0)
             } catch (e: Exception) {
+                Log.w(TAG, "Equalizer indisponible, boost seul", e)
                 null
             }
             loudness?.setEnabled(false)
             eq?.enabled = false
         } catch (e: RuntimeException) {
+            Log.e(TAG, "Effet global non supporté", e)
             error = "Effet global non supporté sur cet appareil: ${e.message}"
             loudness = null
             eq = null
         } catch (e: Exception) {
+            Log.e(TAG, "Init audio impossible", e)
             error = "Init audio impossible: ${e.message}"
             loudness = null
             eq = null
@@ -78,22 +85,25 @@ class BoostEngine {
                 applyEq()
                 loudness?.setEnabled(true)
                 if (voiceEnabled) eq?.enabled = true
+                error = null
             } else {
                 loudness?.setEnabled(false)
                 eq?.enabled = false
             }
         } catch (e: Exception) {
+            Log.e(TAG, "Activation impossible", e)
             error = "Activation impossible: ${e.message}"
         }
     }
 
     private fun applyGain() {
         val l = loudness ?: return
-        val gainMb = ((totalPercent - MIN_TOTAL) * 20).coerceIn(0, MAX_GAIN_MB)
+        val gainMb = ((totalPercent - MIN_TOTAL) * MB_PER_PERCENT).coerceIn(0, MAX_GAIN_MB)
         appliedGainMb = gainMb
         try {
             l.setTargetGain(gainMb)
         } catch (e: Exception) {
+            Log.e(TAG, "Gain refusé", e)
             error = "Gain refusé par l'appareil: ${e.message}"
         }
     }
@@ -123,7 +133,11 @@ class BoostEngine {
             if (masterOn) e.enabled = true
         } catch (ex: Exception) {
             // EQ optionnel : on ne bloque pas le boost si l'EQ échoue.
-            e.enabled = false
+            Log.w(TAG, "EQ en échec", ex)
+            eqSummary = "EQ: indisponible"
+            try {
+                e.enabled = false
+            } catch (_: Exception) {}
         }
     }
 

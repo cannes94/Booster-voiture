@@ -1,4 +1,4 @@
-package com.example.test
+package com.cannes94.boostervoiture
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 
 /**
  * Service manuel : tu le lances avant de rouler, il tient l'effet
@@ -27,13 +28,13 @@ class BoostService : Service() {
         const val NOTIF_ID = 11
         const val PREFS = "booster"
 
-        const val ACTION_START = "com.example.test.START"
-        const val ACTION_STOP = "com.example.test.STOP"
-        const val ACTION_SET_BOOST = "com.example.test.SET_BOOST"
-        const val ACTION_SET_VOICE = "com.example.test.SET_VOICE"
-        const val ACTION_INC = "com.example.test.INC"
-        const val ACTION_DEC = "com.example.test.DEC"
-        const val ACTION_TOGGLE = "com.example.test.TOGGLE"
+        const val ACTION_START = "com.cannes94.boostervoiture.START"
+        const val ACTION_STOP = "com.cannes94.boostervoiture.STOP"
+        const val ACTION_SET_BOOST = "com.cannes94.boostervoiture.SET_BOOST"
+        const val ACTION_SET_VOICE = "com.cannes94.boostervoiture.SET_VOICE"
+        const val ACTION_INC = "com.cannes94.boostervoiture.INC"
+        const val ACTION_DEC = "com.cannes94.boostervoiture.DEC"
+        const val ACTION_TOGGLE = "com.cannes94.boostervoiture.TOGGLE"
 
         const val EXTRA_BOOST = "boost"
         const val EXTRA_VOICE = "voice"
@@ -44,6 +45,7 @@ class BoostService : Service() {
         const val KEY_LAST_GAIN = "last_gain_mb"
         const val KEY_LAST_ERROR = "last_error"
         const val KEY_EQ = "last_eq"
+        private const val TAG = "BoostService"
 
         fun intent(ctx: Context, action: String): Intent =
             Intent(ctx, BoostService::class.java).setAction(action)
@@ -53,6 +55,9 @@ class BoostService : Service() {
     private lateinit var audioManager: AudioManager
     private var pausedForCall = false
     private var callPollHandler: Handler? = null
+    // Gardé pour pouvoir le désinscrire dans onDestroy (sinon fuite du service).
+    private var modeListener: AudioManager.OnModeChangedListener? = null
+    private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
 
     override fun onCreate() {
         super.onCreate()
@@ -60,8 +65,7 @@ class BoostService : Service() {
         engine = BoostEngine()
         createChannel()
 
-        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        val boost = prefs.getInt(KEY_BOOST, 130).coerceIn(100, 150)
+        val boost = prefs.getInt(KEY_BOOST, 130).coerceIn(BoostEngine.MIN_TOTAL, BoostEngine.MAX_TOTAL)
         val voice = prefs.getBoolean(KEY_VOICE, true)
         val on = prefs.getBoolean(KEY_ON, false)
 
@@ -71,19 +75,20 @@ class BoostService : Service() {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             try {
-                audioManager.addOnModeChangedListener(
-                    mainExecutor,
-                    AudioManager.OnModeChangedListener { refreshCallState() }
-                )
-            } catch (_: Exception) {}
+                val l = AudioManager.OnModeChangedListener { refreshCallState() }
+                audioManager.addOnModeChangedListener(mainExecutor, l)
+                modeListener = l
+            } catch (e: Exception) {
+                Log.w(TAG, "Listener de mode audio indisponible, polling", e)
+                startCallPolling()
+            }
         } else {
             startCallPolling()
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        var boost = prefs.getInt(KEY_BOOST, 130).coerceIn(100, 150)
+        var boost = prefs.getInt(KEY_BOOST, 130).coerceIn(BoostEngine.MIN_TOTAL, BoostEngine.MAX_TOTAL)
         var voice = prefs.getBoolean(KEY_VOICE, true)
         var on = prefs.getBoolean(KEY_ON, false)
 
@@ -95,7 +100,7 @@ class BoostService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_SET_BOOST -> {
-                boost = intent.getIntExtra(EXTRA_BOOST, boost).coerceIn(100, 150)
+                boost = intent.getIntExtra(EXTRA_BOOST, boost).coerceIn(BoostEngine.MIN_TOTAL, BoostEngine.MAX_TOTAL)
                 on = true
             }
             ACTION_SET_VOICE -> {
@@ -103,11 +108,11 @@ class BoostService : Service() {
                 on = true
             }
             ACTION_INC -> {
-                boost = (boost + 10).coerceIn(100, 150)
+                boost = (boost + 10).coerceIn(BoostEngine.MIN_TOTAL, BoostEngine.MAX_TOTAL)
                 on = true
             }
             ACTION_DEC -> {
-                boost = (boost - 10).coerceIn(100, 150)
+                boost = (boost - 10).coerceIn(BoostEngine.MIN_TOTAL, BoostEngine.MAX_TOTAL)
                 on = true
             }
             ACTION_TOGGLE -> { on = !on }
@@ -137,37 +142,36 @@ class BoostService : Service() {
         try {
             val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
             val cur = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-            if (getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_PREV_VOL, -1) < 0) {
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            if (prefs.getInt(KEY_PREV_VOL, -1) < 0) {
+                prefs.edit()
                     .putInt(KEY_PREV_VOL, cur).apply()
             }
             if (cur < max) audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, max, 0)
-        } catch (_: Exception) {}
+        } catch (e: Exception) { Log.w(TAG, "Exception ignorée", e) }
     }
 
     private fun restoreSystemVolume() {
         try {
-            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
             val prev = prefs.getInt(KEY_PREV_VOL, -1)
             if (prev >= 0) {
                 audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, prev, 0)
                 prefs.edit().putInt(KEY_PREV_VOL, -1).apply()
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) { Log.w(TAG, "Exception ignorée", e) }
     }
 
     private fun writeDebugPrefs() {
         try {
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            prefs.edit()
                 .putInt(KEY_LAST_GAIN, engine?.appliedGainMb ?: -1)
                 .putString(KEY_LAST_ERROR, engine?.error)
                 .putString(KEY_EQ, engine?.eqSummary)
                 .apply()
-        } catch (_: Exception) {}
+        } catch (e: Exception) { Log.w(TAG, "Exception ignorée", e) }
     }
 
     private fun saveState(boost: Int, voice: Boolean, on: Boolean) {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+        prefs.edit()
             .putInt(KEY_BOOST, boost)
             .putBoolean(KEY_VOICE, voice)
             .putBoolean(KEY_ON, on)
@@ -185,7 +189,6 @@ class BoostService : Service() {
 
     private fun refreshCallState() {
         val e = engine ?: return
-        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val wantOn = prefs.getBoolean(KEY_ON, false)
         if (isInCall()) {
             if (wantOn) {
@@ -216,7 +219,6 @@ class BoostService : Service() {
     }
 
     private fun updateNotification() {
-        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val n = buildNotification(
             prefs.getInt(KEY_BOOST, 130),
             prefs.getBoolean(KEY_VOICE, true),
@@ -225,13 +227,13 @@ class BoostService : Service() {
         try {
             val nm = getSystemService(NotificationManager::class.java)
             nm.notify(NOTIF_ID, n)
-        } catch (_: Exception) {}
+        } catch (e: Exception) { Log.w(TAG, "Exception ignorée", e) }
     }
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val ch = NotificationChannel(
-                CHANNEL_ID, "Booster voiture", NotificationManager.IMPORTANCE_LOW
+                CHANNEL_ID, getString(R.string.channel_name), NotificationManager.IMPORTANCE_LOW
             )
             getSystemService(NotificationManager::class.java)?.createNotificationChannel(ch)
         }
@@ -251,13 +253,14 @@ class BoostService : Service() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val title = if (on) "Booster ON — $boost%" else "Booster OFF"
+        val title = if (on) getString(R.string.notif_title_on, boost) else getString(R.string.notif_title_off)
         val sysVol = try {
             "${audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)}/" +
                 audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         } catch (_: Exception) { "?/?" }
-        val text = (if (voice) "Voix podcast" else "Brut") + " • sys $sysVol" +
-            (if (pausedForCall) " • pause appel" else "") +
+        val text = (if (voice) getString(R.string.notif_mode_voice) else getString(R.string.notif_mode_raw)) +
+            getString(R.string.notif_sys, sysVol) +
+            (if (pausedForCall) getString(R.string.notif_paused) else "") +
             (engine?.error?.let { " • $it" } ?: "")
 
         val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -283,6 +286,8 @@ class BoostService : Service() {
     }
 
     private fun startForegroundWithType(n: Notification) {
+        // Manifeste : permission FOREGROUND_SERVICE_MEDIA_PLAYBACK +
+        // foregroundServiceType="mediaPlayback" déjà déclarés, un seul appel suffit.
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
@@ -293,10 +298,9 @@ class BoostService : Service() {
                 @Suppress("DEPRECATION")
                 startForeground(NOTIF_ID, n)
             }
-        } catch (_: Exception) {
-            // Dernier recours : notification simple.
-            @Suppress("DEPRECATION")
-            startForeground(NOTIF_ID, n)
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground impossible, arrêt", e)
+            stopSelf()
         }
     }
 
@@ -304,7 +308,7 @@ class BoostService : Service() {
         callPollHandler?.removeCallbacksAndMessages(null)
         try {
             engine?.release()
-        } catch (_: Exception) {}
+        } catch (e: Exception) { Log.w(TAG, "Exception ignorée", e) }
         engine = null
         restoreSystemVolume()
         try {
@@ -318,9 +322,19 @@ class BoostService : Service() {
 
     override fun onDestroy() {
         callPollHandler?.removeCallbacksAndMessages(null)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            modeListener?.let {
+                try {
+                    audioManager.removeOnModeChangedListener(it)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Désinscription du listener impossible", e)
+                }
+            }
+        }
+        modeListener = null
         try {
             engine?.release()
-        } catch (_: Exception) {}
+        } catch (e: Exception) { Log.w(TAG, "Exception ignorée", e) }
         super.onDestroy()
     }
 

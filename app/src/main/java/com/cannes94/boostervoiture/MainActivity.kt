@@ -1,15 +1,17 @@
-package com.example.test
+package com.cannes94.boostervoiture
 
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.widget.Button
+import android.widget.CompoundButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -23,6 +25,10 @@ import android.widget.Toast
  */
 class MainActivity : Activity() {
 
+    companion object {
+        private const val NOTIF_REQ = 1001
+    }
+
     private lateinit var statusView: TextView
     private lateinit var boostLabel: TextView
     private lateinit var debugView: TextView
@@ -30,12 +36,28 @@ class MainActivity : Activity() {
     private lateinit var seekBar: SeekBar
     private lateinit var voiceSwitch: Switch
 
+    private val Int.dp: Int get() = (this * resources.displayMetrics.density).toInt()
+
+    // Le SharedPreferences ne garde qu'une référence faible : on la conserve ici.
+    // Le service écrit son état dans les prefs, l'UI se met à jour toute seule
+    // (plus besoin des refresh() différés de 300 ms).
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> refresh() }
+
+    private val voiceListener = CompoundButton.OnCheckedChangeListener { _, checked ->
+        val i = BoostService.intent(this, BoostService.ACTION_SET_VOICE)
+            .putExtra(BoostService.EXTRA_VOICE, checked)
+        sendService(i)
+    }
+
+    // SeekBar 0..50 => 100..150 % (fonctionne aussi avant API 26, où min n'existe pas).
+    private val seekRange = BoostEngine.MAX_TOTAL - BoostEngine.MIN_TOTAL
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestNotifPermissionIfNeeded()
         showDisclaimerOnce()
 
-        val root = ScrollView(this).apply { setPadding(32, 32, 32, 32) }
+        val root = ScrollView(this).apply { setPadding(32.dp, 32.dp, 32.dp, 32.dp) }
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -43,32 +65,31 @@ class MainActivity : Activity() {
         root.addView(col)
 
         val title = TextView(this).apply {
-            text = "Booster Voiture"
+            text = getString(R.string.title_booster)
             textSize = 26f
             gravity = Gravity.CENTER
         }
         statusView = TextView(this).apply {
             textSize = 20f
             gravity = Gravity.CENTER
-            setPadding(0, 24, 0, 24)
+            setPadding(0, 24.dp, 0, 24.dp)
         }
         toggleBtn = Button(this).apply {
             textSize = 24f
-            minimumHeight = 180
+            minimumHeight = 180.dp
         }
         boostLabel = TextView(this).apply {
             textSize = 22f
             gravity = Gravity.CENTER
-            setPadding(0, 32, 0, 8)
+            setPadding(0, 32.dp, 0, 8.dp)
         }
         seekBar = SeekBar(this).apply {
-            max = 150
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) min = 100
+            max = seekRange
         }
         voiceSwitch = Switch(this).apply {
-            text = "Preset Voix podcast (+3dB 1-4kHz, sans coupe)"
+            text = getString(R.string.preset_voice)
             textSize = 18f
-            setPadding(0, 32, 0, 32)
+            setPadding(0, 32.dp, 0, 32.dp)
         }
         val abRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -79,61 +100,47 @@ class MainActivity : Activity() {
         abRow.addView(minusBtn)
         abRow.addView(plusBtn)
         val sysMaxBtn = Button(this).apply {
-            text = "Volume système au MAX (test)"
+            text = getString(R.string.btn_sys_max)
             textSize = 18f
         }
         debugView = TextView(this).apply {
             textSize = 14f
-            setPadding(0, 24, 0, 0)
+            setPadding(0, 24.dp, 0, 0)
         }
         val stopBtn = Button(this).apply {
-            text = "Arrêter et libérer"
+            text = getString(R.string.btn_stop_release)
             textSize = 18f
         }
         val help = TextView(this).apply {
-            text = "Protocole A/B : volume voiture fixe.\n" +
-                "1. OFF (volume sys seul)\n2. ON brut 130% (voix OFF)\n" +
-                "3. ON voix 130% puis 150%.\nSi 2 = 1, l'effet session 0 est ignoré par l'autoradio.\n" +
-                "Coupure auto en appel. Max 150% pour limiter la distorsion."
+            text = getString(R.string.help_protocol)
             textSize = 15f
             gravity = Gravity.CENTER
-            setPadding(0, 32, 0, 0)
+            setPadding(0, 32.dp, 0, 0)
         }
 
         toggleBtn.setOnClickListener {
             sendService(BoostService.intent(this, BoostService.ACTION_TOGGLE))
-            col.postDelayed({ refresh() }, 300)
         }
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
-                if (fromUser) boostLabel.text = "Volume total : ${p.coerceIn(100, 150)}%"
+                if (fromUser) boostLabel.text = getString(R.string.boost_total, BoostEngine.MIN_TOTAL + p)
             }
             override fun onStartTrackingTouch(s: SeekBar?) {}
             override fun onStopTrackingTouch(s: SeekBar?) {
-                val p = (s?.progress ?: 130).coerceIn(100, 150)
+                val p = BoostEngine.MIN_TOTAL + (s?.progress ?: 0).coerceIn(0, seekRange)
                 val i = BoostService.intent(this@MainActivity, BoostService.ACTION_SET_BOOST)
                     .putExtra(BoostService.EXTRA_BOOST, p)
                 sendService(i)
-                col.postDelayed({ refresh() }, 300)
             }
         })
-        voiceSwitch.setOnCheckedChangeListener { _, checked ->
-            val i = BoostService.intent(this, BoostService.ACTION_SET_VOICE)
-                .putExtra(BoostService.EXTRA_VOICE, checked)
-            sendService(i)
-            col.postDelayed({ refresh() }, 300)
-        }
         stopBtn.setOnClickListener {
             sendService(BoostService.intent(this, BoostService.ACTION_STOP))
-            col.postDelayed({ refresh() }, 300)
         }
         minusBtn.setOnClickListener {
             sendService(BoostService.intent(this, BoostService.ACTION_DEC))
-            col.postDelayed({ refresh() }, 300)
         }
         plusBtn.setOnClickListener {
             sendService(BoostService.intent(this, BoostService.ACTION_INC))
-            col.postDelayed({ refresh() }, 300)
         }
         sysMaxBtn.setOnClickListener {
             try {
@@ -143,9 +150,9 @@ class MainActivity : Activity() {
                     am.getStreamMaxVolume(AudioManager.STREAM_MUSIC), 0
                 )
             } catch (e: Exception) {
-                Toast.makeText(this, "Volume sys impossible: ${e.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, getString(R.string.toast_sys_impossible, e.message), Toast.LENGTH_LONG).show()
             }
-            col.postDelayed({ refresh() }, 300)
+            refresh()
         }
 
         col.addView(title)
@@ -164,31 +171,33 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        getSharedPreferences(BoostService.PREFS, MODE_PRIVATE)
+            .registerOnSharedPreferenceChangeListener(prefsListener)
         refresh()
+    }
+
+    override fun onPause() {
+        getSharedPreferences(BoostService.PREFS, MODE_PRIVATE)
+            .unregisterOnSharedPreferenceChangeListener(prefsListener)
+        super.onPause()
     }
 
     private fun refresh() {
         val prefs = getSharedPreferences(BoostService.PREFS, MODE_PRIVATE)
-        val boost = prefs.getInt(BoostService.KEY_BOOST, 130).coerceIn(100, 150)
+        val boost = prefs.getInt(BoostService.KEY_BOOST, 130)
+            .coerceIn(BoostEngine.MIN_TOTAL, BoostEngine.MAX_TOTAL)
         val voice = prefs.getBoolean(BoostService.KEY_VOICE, true)
         val on = prefs.getBoolean(BoostService.KEY_ON, false)
 
         // Évite la boucle du listener quand on restaure l'état.
         voiceSwitch.setOnCheckedChangeListener(null)
         voiceSwitch.isChecked = voice
-        voiceSwitch.setOnCheckedChangeListener { _, checked ->
-            val i = BoostService.intent(this, BoostService.ACTION_SET_VOICE)
-                .putExtra(BoostService.EXTRA_VOICE, checked)
-            sendService(i)
-            colRefreshDelay()
-        }
+        voiceSwitch.setOnCheckedChangeListener(voiceListener)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) seekBar.min = 100
-        seekBar.max = 150
-        seekBar.progress = boost
-        boostLabel.text = "Volume total : $boost%"
-        statusView.text = if (on) "État : ON à $boost%" else "État : OFF"
-        toggleBtn.text = if (on) "COUPER (test B)" else "ACTIVER (test B)"
+        seekBar.progress = boost - BoostEngine.MIN_TOTAL
+        boostLabel.text = getString(R.string.boost_total, boost)
+        statusView.text = if (on) getString(R.string.state_on, boost) else getString(R.string.state_off)
+        toggleBtn.text = if (on) getString(R.string.btn_stop) else getString(R.string.btn_start)
 
         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val sysCur = try { am.getStreamVolume(AudioManager.STREAM_MUSIC) } catch (_: Exception) { -1 }
@@ -196,14 +205,11 @@ class MainActivity : Activity() {
         val gain = prefs.getInt(BoostService.KEY_LAST_GAIN, -1)
         val err = prefs.getString(BoostService.KEY_LAST_ERROR, null)
         val eq = prefs.getString(BoostService.KEY_EQ, null)
-        debugView.text = "Debug — sys: $sysCur/$sysMax • gain: " +
-            (if (gain >= 0) "+${gain}mB" else "n/a") +
-            (if (err != null) "\nErreur: $err" else "\nEffet: OK (ou non testé)") +
+        val gainTxt = if (gain >= 0) "+${gain}mB" else getString(R.string.debug_gain_na)
+        debugView.text = getString(R.string.debug_sys_gain, sysCur, sysMax, gainTxt) +
+            (if (err != null) "\n" + getString(R.string.debug_effect_error, err)
+            else "\n" + getString(R.string.debug_effect_ok)) +
             (if (eq != null) "\n$eq" else "")
-    }
-
-    private fun colRefreshDelay() {
-        statusView.postDelayed({ refresh() }, 300)
     }
 
     private fun sendService(i: Intent) {
@@ -219,7 +225,7 @@ class MainActivity : Activity() {
                 startService(i)
             }
         } catch (e: Exception) {
-            Toast.makeText(this, "Service impossible: ${e.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, getString(R.string.toast_service_impossible, e.message), Toast.LENGTH_LONG).show()
         }
     }
 
@@ -228,8 +234,21 @@ class MainActivity : Activity() {
             if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED
             ) {
-                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), NOTIF_REQ)
             }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == NOTIF_REQ &&
+            grantResults.firstOrNull() != PackageManager.PERMISSION_GRANTED
+        ) {
+            Toast.makeText(this, getString(R.string.notif_perm_denied), Toast.LENGTH_LONG).show()
         }
     }
 
@@ -237,13 +256,9 @@ class MainActivity : Activity() {
         val p = getSharedPreferences("app", MODE_PRIVATE)
         if (p.getBoolean("disclaimer_seen", false)) return
         AlertDialog.Builder(this)
-            .setTitle("Volume élevé")
-            .setMessage(
-                "Un boost prolongé à 150% peut fatiguer l'audition et saturer " +
-                    "les petits haut-parleurs. Monte progressivement, " +
-                    "baisse si ça grésille. Usage à tes risques."
-            )
-            .setPositiveButton("Compris") { _, _ ->
+            .setTitle(getString(R.string.disclaimer_title))
+            .setMessage(getString(R.string.disclaimer_msg))
+            .setPositiveButton(getString(R.string.disclaimer_ok)) { _, _ ->
                 p.edit().putBoolean("disclaimer_seen", true).apply()
             }
             .setCancelable(false)

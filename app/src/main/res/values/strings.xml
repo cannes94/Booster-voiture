@@ -1,4 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Booster Voiture</string>
+    <string name="title_booster">Booster Voiture</string>
+    <string name="state_on">État : ON à %1$d%%</string>
+    <string name="state_off">État : OFF</string>
+    <string name="btn_start">ACTIVER (test B)</string>
+    <string name="btn_stop">COUPER (test B)</string>
+    <string name="boost_total">Volume total : %1$d%%</string>
+    <string name="preset_voice">Preset Voix podcast (+3dB 1-4kHz, sans coupe)</string>
+    <string name="btn_sys_max">Volume système au MAX (test)</string>
+    <string name="btn_stop_release">Arrêter et libérer</string>
+    <string name="help_protocol">Protocole A/B : volume voiture fixe.\n1. OFF (volume sys seul)\n2. ON brut 130% (voix OFF)\n3. ON voix 130% puis 150%.\nSi 2 = 1, l\'effet session 0 est ignoré par l\'autoradio.\nCoupure auto en appel. Max 150% pour limiter la distorsion.</string>
+    <string name="disclaimer_title">Volume élevé</string>
+    <string name="disclaimer_msg">Un boost prolongé à 150% peut fatiguer l\'audition et saturer les petits haut-parleurs. Monte progressivement, baisse si ça grésille. Usage à tes risques.</string>
+    <string name="disclaimer_ok">Compris</string>
+    <string name="toast_service_impossible">Service impossible: %1$s</string>
+    <string name="toast_sys_impossible">Volume sys impossible: %1$s</string>
+    <string name="notif_perm_denied">Notifications refusées : les contrôles resteront dans l\'appli, le service tourne quand même.</string>
+    <string name="debug_sys_gain">Debug — sys: %1$d/%2$d • gain: %3$s</string>
+    <string name="debug_gain_na">n/a</string>
+    <string name="debug_effect_ok">Effet: OK (ou non testé)</string>
+    <string name="debug_effect_error">Erreur: %1$s</string>
+    <string name="channel_name">Booster voiture</string>
+    <string name="notif_title_on">Booster ON — %1$d%%</string>
+    <string name="notif_title_off">Booster OFF</string>
+    <string name="notif_mode_voice">Voix podcast</string>
+    <string name="notif_mode_raw">Brut</string>
+    <string name="notif_paused"> • pause appel</string>
+    <string name="notif_sys"> • sys %1$s</string>
 </resources>
