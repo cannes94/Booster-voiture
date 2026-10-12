@@ -218,12 +218,7 @@ class MainActivity : Activity() {
                 startService(i)
                 return
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(i)
-            } else {
-                @Suppress("DEPRECATION")
-                startService(i)
-            }
+            startForegroundService(i)
         } catch (e: Exception) {
             Toast.makeText(this, getString(R.string.toast_service_impossible, e.message), Toast.LENGTH_LONG).show()
         }

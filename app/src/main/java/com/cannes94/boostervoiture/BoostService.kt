@@ -231,12 +231,10 @@ class BoostService : Service() {
     }
 
     private fun createChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(
-                CHANNEL_ID, getString(R.string.channel_name), NotificationManager.IMPORTANCE_LOW
-            )
-            getSystemService(NotificationManager::class.java)?.createNotificationChannel(ch)
-        }
+        val ch = NotificationChannel(
+            CHANNEL_ID, getString(R.string.channel_name), NotificationManager.IMPORTANCE_LOW
+        )
+        getSystemService(NotificationManager::class.java)?.createNotificationChannel(ch)
     }
 
     private fun actionIntent(action: String): PendingIntent {
@@ -263,13 +261,7 @@ class BoostService : Service() {
             (if (pausedForCall) getString(R.string.notif_paused) else "") +
             (engine?.error?.let { " • $it" } ?: "")
 
-        val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
-        return b
+        return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_media_play)
