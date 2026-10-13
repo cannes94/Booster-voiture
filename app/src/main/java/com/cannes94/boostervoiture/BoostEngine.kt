@@ -3,8 +3,15 @@ package com.cannes94.boostervoiture
 import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
 import android.util.Log
+
 /**
- * Moteur de boost global (session audio 0) pour usage perso voiture.
+ * Moteur de boost PAR SESSION audio (usage perso voiture).
+ *
+ * L'effet global (session 0) est déprécié et ignoré par beaucoup d'appareils.
+ * On attache donc un LoudnessEnhancer (+ Equalizer) à la session de chaque lecteur
+ * (Spotify, YouTube Music...) que celui-ci annonce par le broadcast
+ * ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION (voir BoostService).
+ *
  * Total affiché 100..150% : 100 = gain 0mB, 150 = +1000mB (~+10dB).
  * Preset voix v2 : flat partout sauf +3dB sur 1-4kHz, AUCUNE coupe
  * (la coupe des basses faisait baisser le niveau global perçu).
@@ -17,15 +24,22 @@ class BoostEngine {
         const val MAX_GAIN_MB = 1000
         /** 1% de boost = 20 mB de gain (100..150% => 0..1000 mB). */
         const val MB_PER_PERCENT = 20
+        /** Garde-fou : au-delà, on libère la session la plus ancienne. */
+        private const val MAX_SESSIONS = 8
         private const val TAG = "BoostEngine"
     }
 
-    private var loudness: LoudnessEnhancer? = null
-    private var eq: Equalizer? = null
+    private class SessionFx(
+        val sessionId: Int,
+        val packageName: String?,
+        val loudness: LoudnessEnhancer,
+        val eq: Equalizer?
+    )
+
+    private val sessions = LinkedHashMap<Int, SessionFx>()
 
     var error: String? = null
         private set
-    val available: Boolean get() = loudness != null
 
     var totalPercent: Int = 130
         private set
@@ -38,81 +52,100 @@ class BoostEngine {
     var eqSummary: String = "EQ: -"
         private set
 
-    init {
-        try {
-            // Session 0 = effet global (dépend de l'OEM, à tester par appareil).
-            loudness = LoudnessEnhancer(0)
-            eq = try {
-                Equalizer(0, 0)
-            } catch (e: Exception) {
-                Log.w(TAG, "Equalizer indisponible, boost seul", e)
-                null
-            }
-            loudness?.setEnabled(false)
-            eq?.enabled = false
-        } catch (e: RuntimeException) {
-            Log.e(TAG, "Effet global non supporté", e)
-            error = "Effet global non supporté sur cet appareil: ${e.message}"
-            loudness = null
-            eq = null
+    /** Au moins un lecteur a annoncé sa session audio. */
+    val available: Boolean
+        @Synchronized get() = sessions.isNotEmpty()
+
+    /** Paquets (ou n° de session si inconnu) des lecteurs auxquels le boost est attaché. */
+    val sessionPackages: List<String>
+        @Synchronized get() = sessions.values.map { it.packageName ?: "#${it.sessionId}" }
+
+    @Synchronized
+    fun attachSession(sessionId: Int, packageName: String?) {
+        if (sessionId <= 0) return // 0 = global (déprécié), négatif = valeur invalide
+        if (sessions.containsKey(sessionId)) return
+
+        val loudness = try {
+            LoudnessEnhancer(sessionId)
         } catch (e: Exception) {
-            Log.e(TAG, "Init audio impossible", e)
-            error = "Init audio impossible: ${e.message}"
-            loudness = null
-            eq = null
+            Log.e(TAG, "LoudnessEnhancer refusé pour la session $sessionId ($packageName)", e)
+            error = "Session $sessionId refusée: ${e.message}"
+            return
+        }
+        val eq = try {
+            Equalizer(0, sessionId)
+        } catch (e: Exception) {
+            Log.w(TAG, "Equalizer indisponible pour la session $sessionId, boost seul", e)
+            null
+        }
+
+        while (sessions.size >= MAX_SESSIONS) {
+            val oldest = sessions.keys.first()
+            sessions.remove(oldest)?.let { releaseFx(it) }
+        }
+        val fx = SessionFx(sessionId, packageName, loudness, eq)
+        sessions[sessionId] = fx
+        Log.i(TAG, "Session $sessionId attachée ($packageName)")
+
+        applyGain(fx)
+        applyEq(fx)
+        applyEnabled(fx)
+    }
+
+    @Synchronized
+    fun detachSession(sessionId: Int) {
+        sessions.remove(sessionId)?.let {
+            Log.i(TAG, "Session $sessionId libérée (${it.packageName})")
+            releaseFx(it)
         }
     }
 
     @Synchronized
     fun setBoost(total: Int) {
         totalPercent = total.coerceIn(MIN_TOTAL, MAX_TOTAL)
-        applyGain()
+        appliedGainMb = ((totalPercent - MIN_TOTAL) * MB_PER_PERCENT).coerceIn(0, MAX_GAIN_MB)
+        sessions.values.forEach { applyGain(it) }
     }
 
     @Synchronized
     fun setVoicePreset(enabled: Boolean) {
         voiceEnabled = enabled
-        applyEq()
+        sessions.values.forEach {
+            applyEq(it)
+            applyEnabled(it)
+        }
     }
 
     @Synchronized
     fun setEnabled(on: Boolean) {
         masterOn = on
+        if (on) error = null
+        sessions.values.forEach { applyEnabled(it) }
+    }
+
+    private fun applyEnabled(fx: SessionFx) {
         try {
-            if (!available) return
-            if (on) {
-                applyGain()
-                applyEq()
-                loudness?.setEnabled(true)
-                if (voiceEnabled) eq?.enabled = true
-                error = null
-            } else {
-                loudness?.setEnabled(false)
-                eq?.enabled = false
-            }
+            fx.loudness.setEnabled(masterOn)
+            fx.eq?.enabled = masterOn && voiceEnabled
         } catch (e: Exception) {
-            Log.e(TAG, "Activation impossible", e)
+            Log.e(TAG, "Activation impossible (session ${fx.sessionId})", e)
             error = "Activation impossible: ${e.message}"
         }
     }
 
-    private fun applyGain() {
-        val l = loudness ?: return
-        val gainMb = ((totalPercent - MIN_TOTAL) * MB_PER_PERCENT).coerceIn(0, MAX_GAIN_MB)
-        appliedGainMb = gainMb
+    private fun applyGain(fx: SessionFx) {
         try {
-            l.setTargetGain(gainMb)
+            fx.loudness.setTargetGain(appliedGainMb)
         } catch (e: Exception) {
-            Log.e(TAG, "Gain refusé", e)
+            Log.e(TAG, "Gain refusé (session ${fx.sessionId})", e)
             error = "Gain refusé par l'appareil: ${e.message}"
         }
     }
 
-    private fun applyEq() {
-        val e = eq ?: return
+    private fun applyEq(fx: SessionFx) {
+        val e = fx.eq ?: return
         try {
             if (!voiceEnabled) {
-                e.enabled = false
                 for (i in 0 until e.numberOfBands) {
                     e.setBandLevel(i.toShort(), 0)
                 }
@@ -130,10 +163,9 @@ class BoostEngine {
                 applied.append(centerHz).append("Hz=").append(target).append("mB;")
             }
             eqSummary = "EQ: $applied"
-            if (masterOn) e.enabled = true
         } catch (ex: Exception) {
             // EQ optionnel : on ne bloque pas le boost si l'EQ échoue.
-            Log.w(TAG, "EQ en échec", ex)
+            Log.w(TAG, "EQ en échec (session ${fx.sessionId})", ex)
             eqSummary = "EQ: indisponible"
             try {
                 e.enabled = false
@@ -141,22 +173,25 @@ class BoostEngine {
         }
     }
 
+    private fun releaseFx(fx: SessionFx) {
+        try {
+            fx.loudness.setEnabled(false)
+        } catch (_: Exception) {}
+        try {
+            fx.eq?.enabled = false
+        } catch (_: Exception) {}
+        try {
+            fx.loudness.release()
+        } catch (_: Exception) {}
+        try {
+            fx.eq?.release()
+        } catch (_: Exception) {}
+    }
+
     @Synchronized
     fun release() {
-        try {
-            loudness?.setEnabled(false)
-        } catch (_: Exception) {}
-        try {
-            eq?.enabled = false
-        } catch (_: Exception) {}
-        try {
-            loudness?.release()
-        } catch (_: Exception) {}
-        try {
-            eq?.release()
-        } catch (_: Exception) {}
-        loudness = null
-        eq = null
+        sessions.values.forEach { releaseFx(it) }
+        sessions.clear()
         masterOn = false
     }
 }

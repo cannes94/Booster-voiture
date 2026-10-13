@@ -5,10 +5,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioManager
+import android.media.audiofx.AudioEffect
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -45,6 +49,7 @@ class BoostService : Service() {
         const val KEY_LAST_GAIN = "last_gain_mb"
         const val KEY_LAST_ERROR = "last_error"
         const val KEY_EQ = "last_eq"
+        const val KEY_SESSIONS = "last_sessions"
         private const val TAG = "BoostService"
 
         fun intent(ctx: Context, action: String): Intent =
@@ -59,6 +64,44 @@ class BoostService : Service() {
     private var modeListener: AudioManager.OnModeChangedListener? = null
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
 
+    /**
+     * Les lecteurs (Spotify, YouTube Music...) annoncent leur session audio par ce broadcast.
+     * C'est la seule façon supportée d'attacher un effet à leur son (la session 0 est dépréciée).
+     */
+    private val sessionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val i = intent ?: return
+            val session = i.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, AudioEffect.ERROR_BAD_VALUE)
+            val pkg = i.getStringExtra(AudioEffect.EXTRA_PACKAGE_NAME)
+            if (pkg == packageName) return
+            when (i.action) {
+                AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION -> engine?.attachSession(session, pkg)
+                AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION -> engine?.detachSession(session)
+                else -> return
+            }
+            writeDebugPrefs()
+            updateNotification()
+        }
+    }
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private fun registerSessionReceiver() {
+        val filter = IntentFilter().apply {
+            addAction(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION)
+            addAction(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION)
+        }
+        try {
+            // Émetteurs = autres applis => le récepteur doit être exporté.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(sessionReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(sessionReceiver, filter)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Récepteur de sessions audio impossible", e)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -72,6 +115,7 @@ class BoostService : Service() {
         engine?.setBoost(boost)
         engine?.setVoicePreset(voice)
         engine?.setEnabled(on)
+        registerSessionReceiver()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             try {
@@ -166,6 +210,7 @@ class BoostService : Service() {
                 .putInt(KEY_LAST_GAIN, engine?.appliedGainMb ?: -1)
                 .putString(KEY_LAST_ERROR, engine?.error)
                 .putString(KEY_EQ, engine?.eqSummary)
+                .putString(KEY_SESSIONS, engine?.sessionPackages?.joinToString(", ")?.ifEmpty { null })
                 .apply()
         } catch (e: Exception) { Log.w(TAG, "Exception ignorée", e) }
     }
@@ -324,6 +369,9 @@ class BoostService : Service() {
             }
         }
         modeListener = null
+        try {
+            unregisterReceiver(sessionReceiver)
+        } catch (e: Exception) { Log.w(TAG, "Récepteur déjà désinscrit", e) }
         try {
             engine?.release()
         } catch (e: Exception) { Log.w(TAG, "Exception ignorée", e) }

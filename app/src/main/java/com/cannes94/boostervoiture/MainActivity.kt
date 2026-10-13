@@ -205,11 +205,14 @@ class MainActivity : Activity() {
         val gain = prefs.getInt(BoostService.KEY_LAST_GAIN, -1)
         val err = prefs.getString(BoostService.KEY_LAST_ERROR, null)
         val eq = prefs.getString(BoostService.KEY_EQ, null)
+        val sessions = prefs.getString(BoostService.KEY_SESSIONS, null)
         val gainTxt = if (gain >= 0) "+${gain}mB" else getString(R.string.debug_gain_na)
         debugView.text = getString(R.string.debug_sys_gain, sysCur, sysMax, gainTxt) +
             (if (err != null) "\n" + getString(R.string.debug_effect_error, err)
             else "\n" + getString(R.string.debug_effect_ok)) +
-            (if (eq != null) "\n$eq" else "")
+            (if (eq != null) "\n$eq" else "") +
+            "\n" + (if (sessions.isNullOrEmpty()) getString(R.string.debug_sessions_none)
+            else getString(R.string.debug_sessions, sessions))
     }
 
     private fun sendService(i: Intent) {
