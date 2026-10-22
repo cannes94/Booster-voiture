@@ -77,6 +77,7 @@ class BoostService : Service() {
             val session = i.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, AudioEffect.ERROR_BAD_VALUE)
             val pkg = i.getStringExtra(AudioEffect.EXTRA_PACKAGE_NAME)
             if (pkg == packageName) return
+            val errorBefore = engine?.error
             val changed = when (i.action) {
                 AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION ->
                     engine?.attachSession(session, pkg) ?: false
@@ -85,9 +86,12 @@ class BoostService : Service() {
                 else -> false
             }
             // Les annonces répétées (heartbeat NewPipe) ne doivent ni réécrire
-            // les prefs ni reconstruire la notification.
-            if (changed) {
+            // les prefs ni reconstruire la notification. Mais un changement
+            // d'erreur (session refusée) doit rester visible dans le debug.
+            if (SessionEvents.shouldWriteDebug(changed, errorBefore, engine?.error)) {
                 writeDebugPrefs()
+            }
+            if (changed) {
                 updateNotification()
             }
         }

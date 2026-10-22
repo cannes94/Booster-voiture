@@ -94,12 +94,15 @@ class BoostEngine {
     fun attachSession(sessionId: Int, packageName: String?): Boolean {
         if (sessionId <= 0) return false // 0 = global (voir globalFx), négatif = invalide
         if (registry.has(sessionId)) return false
+        // Session déjà refusée : ne pas retenter à chaque heartbeat (toutes les 10 s).
+        if (registry.isFailed(sessionId)) return false
 
         val loudness = try {
             LoudnessEnhancer(sessionId)
         } catch (e: Exception) {
             Log.e(TAG, "LoudnessEnhancer refusé pour la session $sessionId ($packageName)", e)
             error = "Session $sessionId refusée: ${e.message}"
+            registry.markFailed(sessionId)
             return false
         }
         val eq = try {

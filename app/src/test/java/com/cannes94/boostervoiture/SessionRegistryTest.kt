@@ -43,4 +43,13 @@ class SessionRegistryTest {
         r.add(9, null)
         assertEquals(listOf("com.spotify.music", "#9"), r.packages())
     }
+
+    @Test fun failedSessionIsTrackedUntilClose() {
+        val r = SessionRegistry()
+        assertFalse(r.isFailed(5))
+        r.markFailed(5)
+        assertTrue(r.isFailed(5))
+        assertFalse(r.remove(5)) // pas attachée : remove ne signale aucun changement
+        assertFalse(r.isFailed(5)) // le CLOSE efface l'échec, un futur OPEN réessaiera
+    }
 }
