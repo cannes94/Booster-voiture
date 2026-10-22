@@ -8,6 +8,7 @@
     <string name="btn_stop">COUPER (test B)</string>
     <string name="boost_total">Volume total : %1$d%%</string>
     <string name="preset_voice">Preset Voix podcast (+3dB 1-4kHz, sans coupe)</string>
+    <string name="global_switch">Effet global session 0 — test YouTube (OFF conseillé)</string>
     <string name="btn_sys_max">Volume système au MAX (test)</string>
     <string name="btn_stop_release">Arrêter et libérer</string>
     <string name="help_protocol">Protocole A/B : volume voiture fixe.\n1. OFF (volume sys seul)\n2. ON brut 130% (voix OFF)\n3. ON voix 130% puis 150%.\nLe boost s\'attache aux lecteurs qui annoncent leur session audio (Spotify, YouTube Music...). Active le boost ici AVANT de lancer la lecture ; si « Aucune session » reste affiché, mets en pause puis relance la lecture.\nCoupure auto en appel. Max 150% pour limiter la distorsion.</string>
@@ -22,6 +23,9 @@
     <string name="debug_effect_ok">Aucune erreur signalée</string>
     <string name="debug_sessions">Sessions audio : %1$s</string>
     <string name="debug_sessions_none">Aucune session audio détectée (relance la lecture)</string>
+    <string name="debug_global">Global : %1$s (%2$s)</string>
+    <string name="debug_global_on">ON</string>
+    <string name="debug_global_off">OFF</string>
     <string name="debug_effect_error">Erreur: %1$s</string>
     <string name="channel_name">Booster voiture</string>
     <string name="notif_title_on">Booster ON — %1$d%%</string>

@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private lateinit var toggleBtn: Button
     private lateinit var seekBar: SeekBar
     private lateinit var voiceSwitch: Switch
+    private lateinit var globalSwitch: Switch
 
     private val Int.dp: Int get() = (this * resources.displayMetrics.density).toInt()
 
@@ -46,6 +47,12 @@ class MainActivity : Activity() {
     private val voiceListener = CompoundButton.OnCheckedChangeListener { _, checked ->
         val i = BoostService.intent(this, BoostService.ACTION_SET_VOICE)
             .putExtra(BoostService.EXTRA_VOICE, checked)
+        sendService(i)
+    }
+
+    private val globalListener = CompoundButton.OnCheckedChangeListener { _, checked ->
+        val i = BoostService.intent(this, BoostService.ACTION_SET_GLOBAL)
+            .putExtra(BoostService.EXTRA_GLOBAL, checked)
         sendService(i)
     }
 
@@ -90,6 +97,11 @@ class MainActivity : Activity() {
             text = getString(R.string.preset_voice)
             textSize = 18f
             setPadding(0, 32.dp, 0, 32.dp)
+        }
+        globalSwitch = Switch(this).apply {
+            text = getString(R.string.global_switch)
+            textSize = 18f
+            setPadding(0, 0, 0, 24.dp)
         }
         val abRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -161,6 +173,7 @@ class MainActivity : Activity() {
         col.addView(boostLabel)
         col.addView(seekBar)
         col.addView(voiceSwitch)
+        col.addView(globalSwitch)
         col.addView(abRow)
         col.addView(sysMaxBtn)
         col.addView(debugView)
@@ -187,12 +200,17 @@ class MainActivity : Activity() {
         val boost = prefs.getInt(BoostService.KEY_BOOST, 130)
             .coerceIn(BoostEngine.MIN_TOTAL, BoostEngine.MAX_TOTAL)
         val voice = prefs.getBoolean(BoostService.KEY_VOICE, true)
+        val global = prefs.getBoolean(BoostService.KEY_GLOBAL, false)
         val on = prefs.getBoolean(BoostService.KEY_ON, false)
 
         // Évite la boucle du listener quand on restaure l'état.
         voiceSwitch.setOnCheckedChangeListener(null)
         voiceSwitch.isChecked = voice
         voiceSwitch.setOnCheckedChangeListener(voiceListener)
+
+        globalSwitch.setOnCheckedChangeListener(null)
+        globalSwitch.isChecked = global
+        globalSwitch.setOnCheckedChangeListener(globalListener)
 
         seekBar.progress = boost - BoostEngine.MIN_TOTAL
         boostLabel.text = getString(R.string.boost_total, boost)
@@ -207,12 +225,16 @@ class MainActivity : Activity() {
         val eq = prefs.getString(BoostService.KEY_EQ, null)
         val sessions = prefs.getString(BoostService.KEY_SESSIONS, null)
         val gainTxt = if (gain >= 0) "+${gain}mB" else getString(R.string.debug_gain_na)
+        val globalTxt = getString(
+            if (global) R.string.debug_global_on else R.string.debug_global_off
+        )
         debugView.text = getString(R.string.debug_sys_gain, sysCur, sysMax, gainTxt) +
             (if (err != null) "\n" + getString(R.string.debug_effect_error, err)
             else "\n" + getString(R.string.debug_effect_ok)) +
             (if (eq != null) "\n$eq" else "") +
             "\n" + (if (sessions.isNullOrEmpty()) getString(R.string.debug_sessions_none)
-            else getString(R.string.debug_sessions, sessions))
+            else getString(R.string.debug_sessions, sessions)) +
+            "\n" + getString(R.string.debug_global, globalTxt, gainTxt)
     }
 
     private fun sendService(i: Intent) {
