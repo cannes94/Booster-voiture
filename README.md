@@ -43,7 +43,28 @@ Ordre d'utilisation :
 3. ON voix 130 % puis 150 % → ne doit plus être plus faible que 2.
 
 Le bloc debug de l'appli affiche : volume sys actuel/max, gain appliqué
-en mB, erreur éventuelle, réglages EQ.
+en mB, erreur éventuelle, réglages EQ, sessions détectées, état du mode global.
+
+## Matrice de vérification
+
+Validé par le build (aucun téléphone connecté sur la machine de build) :
+
+| Élément | Résultat |
+|---|---|
+| Tests unitaires (`gradle testDebugUnitTest`) | 9/9 (gain, preset, gating global, registre de sessions) |
+| APK booster | `app/build/outputs/apk/debug/app-debug.apk` |
+| NewPipe patché | `newpipe/build/app-continuous.apk`, package `org.schabi.newpipe.continuous`, signé debug |
+
+À valider sur le téléphone :
+
+1. Spotify : boost audible (non-régression).
+2. NewPipe Continuous : le debug affiche `org.schabi.newpipe.continuous`, boost
+   audible. Si le booster démarre après le début de lecture, attendre ≤ 10 s
+   (heartbeat du patch).
+3. YouTube natif : « Effet global session 0 » OFF puis ON ; noter si audible
+   (si aucune différence, l'appareil ignore la session 0 : laisser OFF).
+4. Appel entrant : aucun boost pendant l'appel, reprise après.
+5. Arrêt du service : volume système restauré.
 
 ## Compiler
 
