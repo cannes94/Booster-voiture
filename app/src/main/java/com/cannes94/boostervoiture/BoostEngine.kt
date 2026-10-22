@@ -5,12 +5,18 @@ import android.media.audiofx.LoudnessEnhancer
 import android.util.Log
 
 /**
- * Moteur de boost PAR SESSION audio (usage perso voiture).
+ * Moteur de boost audio (usage perso voiture).
  *
- * L'effet global (session 0) est déprécié et ignoré par beaucoup d'appareils.
- * On attache donc un LoudnessEnhancer (+ Equalizer) à la session de chaque lecteur
- * (Spotify, YouTube Music...) que celui-ci annonce par le broadcast
- * ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION (voir BoostService).
+ * Deux moteurs :
+ *  - PAR SESSION : un LoudnessEnhancer (+ Equalizer) attaché à la session de chaque
+ *    lecteur (Spotify, NewPipe...) qui l'annonce par le broadcast
+ *    ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION (voir BoostService). C'est la voie
+ *    fiable : chaque lecteur garde son propre volume.
+ *  - GLOBAL session 0 : LoudnessEnhancer(0) / Equalizer(0,0), OFF par défaut.
+ *    Certains appareils l'ignorent (déprécié), d'autres l'appliquent encore au
+ *    mix de sortie — utile pour les applis qui n'annoncent aucune session
+ *    (YouTube natif). Sécurité : actif seulement si masterOn ET globalEnabled,
+ *    donc jamais pendant un appel (BoostService coupe masterOn).
  *
  * Total affiché 100..150% : 100 = gain 0mB, 150 = +1000mB (~+10dB).
  * Preset voix v2 : flat partout sauf +3dB sur 1-4kHz, AUCUNE coupe
@@ -19,9 +25,9 @@ import android.util.Log
 class BoostEngine {
 
     companion object {
-        const val MIN_TOTAL = 100
-        const val MAX_TOTAL = 150
-        const val MAX_GAIN_MB = 1000
+        const val MIN_TOTAL = BoostMath.MIN_TOTAL
+        const val MAX_TOTAL = BoostMath.MAX_TOTAL
+        const val MAX_GAIN_MB = BoostMath.MAX_GAIN_MB
         /** 1% de boost = 20 mB de gain (100..150% => 0..1000 mB). */
         const val MB_PER_PERCENT = 20
         /** Garde-fou : au-delà, on libère la session la plus ancienne. */
@@ -36,7 +42,12 @@ class BoostEngine {
         val eq: Equalizer?
     )
 
-    private val sessions = LinkedHashMap<Int, SessionFx>()
+    /** Ordre/plafond des sessions ; les effets eux-mêmes vivent dans [sessions]. */
+    private var registry = SessionRegistry(MAX_SESSIONS)
+    private val sessions = HashMap<Int, SessionFx>()
+
+    private var globalLoudness: LoudnessEnhancer? = null
+    private var globalEq: Equalizer? = null
 
     var error: String? = null
         private set
@@ -47,6 +58,8 @@ class BoostEngine {
         private set
     var masterOn: Boolean = false
         private set
+    var globalEnabled: Boolean = false
+        private set
     var appliedGainMb: Int = 0
         private set
     var eqSummary: String = "EQ: -"
@@ -54,23 +67,40 @@ class BoostEngine {
 
     /** Au moins un lecteur a annoncé sa session audio. */
     val available: Boolean
-        @Synchronized get() = sessions.isNotEmpty()
+        @Synchronized get() = registry.size() > 0
 
     /** Paquets (ou n° de session si inconnu) des lecteurs auxquels le boost est attaché. */
     val sessionPackages: List<String>
-        @Synchronized get() = sessions.values.map { it.packageName ?: "#${it.sessionId}" }
+        @Synchronized get() = registry.packages()
+
+    init {
+        // Session 0 : peut être refusée (appareil, politique audio). On ne bloque pas.
+        try {
+            globalLoudness = LoudnessEnhancer(0)
+        } catch (e: Exception) {
+            Log.w(TAG, "LoudnessEnhancer global refusé (session 0)", e)
+        }
+        try {
+            globalEq = Equalizer(0, 0)
+        } catch (e: Exception) {
+            Log.w(TAG, "Equalizer global indisponible (session 0)", e)
+        }
+        applyGainGlobal()
+        applyEqGlobal()
+        applyGlobalEnabled()
+    }
 
     @Synchronized
-    fun attachSession(sessionId: Int, packageName: String?) {
-        if (sessionId <= 0) return // 0 = global (déprécié), négatif = valeur invalide
-        if (sessions.containsKey(sessionId)) return
+    fun attachSession(sessionId: Int, packageName: String?): Boolean {
+        if (sessionId <= 0) return false // 0 = global (voir globalFx), négatif = invalide
+        if (registry.has(sessionId)) return false
 
         val loudness = try {
             LoudnessEnhancer(sessionId)
         } catch (e: Exception) {
             Log.e(TAG, "LoudnessEnhancer refusé pour la session $sessionId ($packageName)", e)
             error = "Session $sessionId refusée: ${e.message}"
-            return
+            return false
         }
         val eq = try {
             Equalizer(0, sessionId)
@@ -79,9 +109,8 @@ class BoostEngine {
             null
         }
 
-        while (sessions.size >= MAX_SESSIONS) {
-            val oldest = sessions.keys.first()
-            sessions.remove(oldest)?.let { releaseFx(it) }
+        registry.add(sessionId, packageName).forEach { evicted ->
+            sessions.remove(evicted)?.let { releaseFx(it) }
         }
         val fx = SessionFx(sessionId, packageName, loudness, eq)
         sessions[sessionId] = fx
@@ -90,21 +119,25 @@ class BoostEngine {
         applyGain(fx)
         applyEq(fx)
         applyEnabled(fx)
+        return true
     }
 
     @Synchronized
-    fun detachSession(sessionId: Int) {
+    fun detachSession(sessionId: Int): Boolean {
+        val changed = registry.remove(sessionId)
         sessions.remove(sessionId)?.let {
             Log.i(TAG, "Session $sessionId libérée (${it.packageName})")
             releaseFx(it)
         }
+        return changed
     }
 
     @Synchronized
     fun setBoost(total: Int) {
         totalPercent = total.coerceIn(MIN_TOTAL, MAX_TOTAL)
-        appliedGainMb = ((totalPercent - MIN_TOTAL) * MB_PER_PERCENT).coerceIn(0, MAX_GAIN_MB)
+        appliedGainMb = BoostMath.gainMb(totalPercent)
         sessions.values.forEach { applyGain(it) }
+        applyGainGlobal()
     }
 
     @Synchronized
@@ -114,6 +147,8 @@ class BoostEngine {
             applyEq(it)
             applyEnabled(it)
         }
+        applyEqGlobal()
+        applyGlobalEnabled()
     }
 
     @Synchronized
@@ -121,6 +156,14 @@ class BoostEngine {
         masterOn = on
         if (on) error = null
         sessions.values.forEach { applyEnabled(it) }
+        applyGlobalEnabled()
+    }
+
+    /** Active/désactive le moteur global ; la sécurité masterOn/appel reste prioritaire. */
+    @Synchronized
+    fun setGlobalEnabled(on: Boolean) {
+        globalEnabled = on
+        applyGlobalEnabled()
     }
 
     private fun applyEnabled(fx: SessionFx) {
@@ -133,6 +176,19 @@ class BoostEngine {
         }
     }
 
+    private fun applyGlobalEnabled() {
+        val active = BoostMath.globalActive(masterOn, globalEnabled)
+        try {
+            globalLoudness?.setEnabled(active)
+        } catch (e: Exception) {
+            Log.e(TAG, "Activation du moteur global impossible", e)
+            error = "Global impossible: ${e.message}"
+        }
+        try {
+            globalEq?.enabled = active && voiceEnabled
+        } catch (_: Exception) {}
+    }
+
     private fun applyGain(fx: SessionFx) {
         try {
             fx.loudness.setTargetGain(appliedGainMb)
@@ -142,8 +198,24 @@ class BoostEngine {
         }
     }
 
+    private fun applyGainGlobal() {
+        try {
+            globalLoudness?.setTargetGain(appliedGainMb)
+        } catch (e: Exception) {
+            Log.w(TAG, "Gain global refusé", e)
+        }
+    }
+
     private fun applyEq(fx: SessionFx) {
-        val e = fx.eq ?: return
+        applyEq(fx.eq)
+    }
+
+    private fun applyEqGlobal() {
+        applyEq(globalEq)
+    }
+
+    private fun applyEq(e: Equalizer?) {
+        if (e == null) return
         try {
             if (!voiceEnabled) {
                 for (i in 0 until e.numberOfBands) {
@@ -158,14 +230,14 @@ class BoostEngine {
                 val band = i.toShort()
                 val centerHz = e.getCenterFreq(band) / 1000
                 // v2 : jamais de coupe, petit boost voix seulement.
-                val target: Int = if (centerHz in 1000..4000) 300 else 0
+                val target = BoostMath.voiceTargetMb(centerHz)
                 e.setBandLevel(band, target.coerceIn(range[0].toInt(), range[1].toInt()).toShort())
                 applied.append(centerHz).append("Hz=").append(target).append("mB;")
             }
             eqSummary = "EQ: $applied"
         } catch (ex: Exception) {
             // EQ optionnel : on ne bloque pas le boost si l'EQ échoue.
-            Log.w(TAG, "EQ en échec (session ${fx.sessionId})", ex)
+            Log.w(TAG, "EQ en échec", ex)
             eqSummary = "EQ: indisponible"
             try {
                 e.enabled = false
@@ -192,6 +264,22 @@ class BoostEngine {
     fun release() {
         sessions.values.forEach { releaseFx(it) }
         sessions.clear()
+        registry = SessionRegistry(MAX_SESSIONS)
+        try {
+            globalLoudness?.setEnabled(false)
+        } catch (_: Exception) {}
+        try {
+            globalEq?.enabled = false
+        } catch (_: Exception) {}
+        try {
+            globalLoudness?.release()
+        } catch (_: Exception) {}
+        try {
+            globalEq?.release()
+        } catch (_: Exception) {}
+        globalLoudness = null
+        globalEq = null
         masterOn = false
+        globalEnabled = false
     }
 }
