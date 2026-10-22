@@ -5,3 +5,6 @@ app/build/
 local.properties
 *.iml
 .DS_Store
+# Clone et APK NewPipe (voir newpipe/build-newpipe.sh)
+newpipe/src/
+newpipe/build/

@@ -11,6 +11,12 @@ malgré le bruit moteur. Android uniquement, sans pub, sans compte.
   `ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION`.
 - Preset « Voix » : +3 dB sur 1-4 kHz, aucune coupe (les basses coupées
   faisaient baisser le niveau global perçu).
+- NewPipe : variante patchée fournie (`newpipe/`), qui annonce sa session audio
+  comme Spotify. Voir [docs/newpipe.md](docs/newpipe.md).
+- Option « Effet global session 0 » (OFF par défaut) : moteur
+  `LoudnessEnhancer(0)` pour tester les applis qui n'annoncent aucune session
+  (YouTube natif). Déprécié par Android, inopérant sur beaucoup d'appareils ;
+  actif seulement si le booster est ON, et jamais pendant un appel.
 
 Ordre d'utilisation :
 
@@ -22,9 +28,10 @@ Ordre d'utilisation :
 ## Limites connues
 
 - Le boost ne marche que si le lecteur annonce sa session audio. Si « Aucune session
-  audio détectée » reste affiché, ce lecteur ne supporte pas les effets système.
-- L'ancien effet global (session 0) est abandonné : déprécié par Android et ignoré
-  par beaucoup d'appareils.
+  audio détectée » reste affiché, ce lecteur ne supporte pas les effets système
+  (utiliser NewPipe patché pour YouTube, ou tester l'option session 0).
+- L'effet global session 0 reste déprécié par Android et ignoré par beaucoup
+  d'appareils : c'est une option de test, OFF par défaut.
 - YouTube vidéo est bloqué en roulant par Android Auto (normal) ;
   YouTube Music et Spotify passent.
 - Coupure auto pendant les appels, reprise ensuite.
