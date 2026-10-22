@@ -39,11 +39,14 @@ class BoostService : Service() {
         const val ACTION_INC = "com.cannes94.boostervoiture.INC"
         const val ACTION_DEC = "com.cannes94.boostervoiture.DEC"
         const val ACTION_TOGGLE = "com.cannes94.boostervoiture.TOGGLE"
+        const val ACTION_SET_GLOBAL = "com.cannes94.boostervoiture.SET_GLOBAL"
 
         const val EXTRA_BOOST = "boost"
         const val EXTRA_VOICE = "voice"
+        const val EXTRA_GLOBAL = "global"
         const val KEY_BOOST = "boost"
         const val KEY_VOICE = "voice"
+        const val KEY_GLOBAL = "global"
         const val KEY_ON = "on"
         const val KEY_PREV_VOL = "prev_vol"
         const val KEY_LAST_GAIN = "last_gain_mb"
@@ -74,13 +77,19 @@ class BoostService : Service() {
             val session = i.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, AudioEffect.ERROR_BAD_VALUE)
             val pkg = i.getStringExtra(AudioEffect.EXTRA_PACKAGE_NAME)
             if (pkg == packageName) return
-            when (i.action) {
-                AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION -> engine?.attachSession(session, pkg)
-                AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION -> engine?.detachSession(session)
-                else -> return
+            val changed = when (i.action) {
+                AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION ->
+                    engine?.attachSession(session, pkg) ?: false
+                AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION ->
+                    engine?.detachSession(session) ?: false
+                else -> false
             }
-            writeDebugPrefs()
-            updateNotification()
+            // Les annonces répétées (heartbeat NewPipe) ne doivent ni réécrire
+            // les prefs ni reconstruire la notification.
+            if (changed) {
+                writeDebugPrefs()
+                updateNotification()
+            }
         }
     }
 
@@ -110,10 +119,12 @@ class BoostService : Service() {
 
         val boost = prefs.getInt(KEY_BOOST, 130).coerceIn(BoostEngine.MIN_TOTAL, BoostEngine.MAX_TOTAL)
         val voice = prefs.getBoolean(KEY_VOICE, true)
+        val global = prefs.getBoolean(KEY_GLOBAL, false)
         val on = prefs.getBoolean(KEY_ON, false)
 
         engine?.setBoost(boost)
         engine?.setVoicePreset(voice)
+        engine?.setGlobalEnabled(global)
         engine?.setEnabled(on)
         registerSessionReceiver()
 
@@ -134,12 +145,13 @@ class BoostService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         var boost = prefs.getInt(KEY_BOOST, 130).coerceIn(BoostEngine.MIN_TOTAL, BoostEngine.MAX_TOTAL)
         var voice = prefs.getBoolean(KEY_VOICE, true)
+        var global = prefs.getBoolean(KEY_GLOBAL, false)
         var on = prefs.getBoolean(KEY_ON, false)
 
         when (intent?.action) {
             ACTION_START -> { on = true }
             ACTION_STOP -> {
-                saveState(boost, voice, false)
+                saveState(boost, voice, global, false)
                 stopAndRelease()
                 return START_NOT_STICKY
             }
@@ -149,6 +161,10 @@ class BoostService : Service() {
             }
             ACTION_SET_VOICE -> {
                 voice = intent.getBooleanExtra(EXTRA_VOICE, voice)
+                on = true
+            }
+            ACTION_SET_GLOBAL -> {
+                global = intent.getBooleanExtra(EXTRA_GLOBAL, global)
                 on = true
             }
             ACTION_INC -> {
@@ -162,9 +178,10 @@ class BoostService : Service() {
             ACTION_TOGGLE -> { on = !on }
         }
 
-        saveState(boost, voice, on)
+        saveState(boost, voice, global, on)
         engine?.setBoost(boost)
         engine?.setVoicePreset(voice)
+        engine?.setGlobalEnabled(global)
         // Si en appel, on ne réactive pas tout de suite.
         if (isInCall()) {
             pausedForCall = on
@@ -215,10 +232,11 @@ class BoostService : Service() {
         } catch (e: Exception) { Log.w(TAG, "Exception ignorée", e) }
     }
 
-    private fun saveState(boost: Int, voice: Boolean, on: Boolean) {
+    private fun saveState(boost: Int, voice: Boolean, global: Boolean, on: Boolean) {
         prefs.edit()
             .putInt(KEY_BOOST, boost)
             .putBoolean(KEY_VOICE, voice)
+            .putBoolean(KEY_GLOBAL, global)
             .putBoolean(KEY_ON, on)
             .apply()
     }
